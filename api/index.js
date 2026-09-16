@@ -50,12 +50,18 @@ __export(schema_exports, {
   checkInEscalations: () => checkInEscalations,
   checkInPolicies: () => checkInPolicies,
   checkInStatusEnum: () => checkInStatusEnum,
+  communityComments: () => communityComments,
+  communityPosts: () => communityPosts,
+  communityReports: () => communityReports,
   emergencyAccessTokens: () => emergencyAccessTokens,
   emergencyContacts: () => emergencyContacts,
+  emergencyResponderDestinations: () => emergencyResponderDestinations,
   fileContextEnum: () => fileContextEnum,
   fileUploads: () => fileUploads,
   incidentAcknowledgements: () => incidentAcknowledgements,
   incidentTimeline: () => incidentTimeline,
+  nearbyAlertNotifications: () => nearbyAlertNotifications,
+  nearbyResponderSettings: () => nearbyResponderSettings,
   notificationRecords: () => notificationRecords,
   notificationStatusEnum: () => notificationStatusEnum,
   passwordResetTokens: () => passwordResetTokens,
@@ -68,6 +74,9 @@ __export(schema_exports, {
   sosEscalationPolicies: () => sosEscalationPolicies,
   statusEnum: () => statusEnum,
   tokenKindEnum: () => tokenKindEnum,
+  travelLocations: () => travelLocations,
+  travelTrips: () => travelTrips,
+  tripStatusEnum: () => tripStatusEnum,
   userSessions: () => userSessions,
   users: () => users,
   vehicleReports: () => vehicleReports,
@@ -92,6 +101,7 @@ var responseEnum = pgEnum("response", ["acknowledged", "responding"]);
 var checkInStatusEnum = pgEnum("checkInStatus", ["active", "safe", "expired", "cancelled"]);
 var tokenKindEnum = pgEnum("kind", ["email", "phone"]);
 var checkInEscalationStatusEnum = pgEnum("checkInEscalationStatus", ["pending", "sent", "failed"]);
+var tripStatusEnum = pgEnum("tripStatus", ["active", "completed", "cancelled", "emergency"]);
 var users = pgTable("users", {
   id: serial("id").primaryKey(),
   authId: varchar("authId", { length: 64 }).unique(),
@@ -122,6 +132,7 @@ var emergencyContacts = pgTable("emergencyContacts", {
   notifySms: boolean("notifySms").default(true).notNull(),
   notifyEmail: boolean("notifyEmail").default(true).notNull(),
   notifyWhatsApp: boolean("notifyWhatsApp").default(false).notNull(),
+  isNextOfKin: boolean("isNextOfKin").default(false).notNull(),
   phoneVerifiedAt: timestamp("phoneVerifiedAt"),
   emailVerifiedAt: timestamp("emailVerifiedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull()
@@ -321,6 +332,104 @@ var vehicleReports = pgTable("vehicleReports", {
   relatedPersonId: integer("relatedPersonId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
+});
+var travelTrips = pgTable("travelTrips", {
+  id: serial("id").primaryKey(),
+  tripId: varchar("tripId", { length: 64 }).notNull().unique(),
+  userId: integer("userId").notNull(),
+  destination: text("destination").notNull(),
+  expectedArrival: timestamp("expectedArrival").notNull(),
+  vehicleNumber: varchar("vehicleNumber", { length: 60 }),
+  vehicleType: varchar("vehicleType", { length: 60 }),
+  vehicleColor: varchar("vehicleColor", { length: 60 }),
+  vehicleDescription: text("vehicleDescription"),
+  vehiclePhotoKey: varchar("vehiclePhotoKey", { length: 255 }),
+  trustedContactIds: text("trustedContactIds"),
+  verificationCode: varchar("verificationCode", { length: 32 }).notNull(),
+  status: tripStatusEnum("status").default("active").notNull(),
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+  lastLatitude: doublePrecision("lastLatitude"),
+  lastLongitude: doublePrecision("lastLongitude"),
+  lastAccuracy: doublePrecision("lastAccuracy"),
+  lastLocationAt: timestamp("lastLocationAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
+});
+var travelLocations = pgTable("travelLocations", {
+  id: serial("id").primaryKey(),
+  tripId: integer("tripId").notNull(),
+  latitude: doublePrecision("latitude").notNull(),
+  longitude: doublePrecision("longitude").notNull(),
+  accuracy: doublePrecision("accuracy"),
+  timestamp: timestamp("timestamp").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull()
+});
+var nearbyResponderSettings = pgTable("nearbyResponderSettings", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull().unique(),
+  enabled: boolean("enabled").default(false).notNull(),
+  lastLatitude: doublePrecision("lastLatitude"),
+  lastLongitude: doublePrecision("lastLongitude"),
+  lastLocationAt: timestamp("lastLocationAt"),
+  radiusKm: doublePrecision("radiusKm").default(5).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
+});
+var nearbyAlertNotifications = pgTable("nearbyAlertNotifications", {
+  id: serial("id").primaryKey(),
+  incidentId: integer("incidentId").notNull(),
+  responderUserId: integer("responderUserId").notNull(),
+  distanceKm: doublePrecision("distanceKm").notNull(),
+  status: varchar("status", { length: 40 }).default("notified").notNull(),
+  notifiedAt: timestamp("notifiedAt").defaultNow().notNull(),
+  acknowledgedAt: timestamp("acknowledgedAt")
+});
+var emergencyResponderDestinations = pgTable("emergencyResponderDestinations", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  type: varchar("type", { length: 40 }).notNull(),
+  // national_emergency, police, ngo, coordinator
+  phone: varchar("phone", { length: 64 }),
+  email: varchar("email", { length: 320 }),
+  notifySms: boolean("notifySms").default(false).notNull(),
+  notifyEmail: boolean("notifyEmail").default(false).notNull(),
+  notifyWhatsApp: boolean("notifyWhatsApp").default(false).notNull(),
+  enabled: boolean("enabled").default(true).notNull(),
+  priority: integer("priority").default(1).notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
+});
+var communityPosts = pgTable("communityPosts", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  content: text("content").notNull(),
+  category: varchar("category", { length: 60 }).default("safety_tip").notNull(),
+  locationName: varchar("locationName", { length: 120 }),
+  isHidden: boolean("isHidden").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => /* @__PURE__ */ new Date()).notNull()
+});
+var communityComments = pgTable("communityComments", {
+  id: serial("id").primaryKey(),
+  postId: integer("postId").notNull(),
+  userId: integer("userId").notNull(),
+  content: text("content").notNull(),
+  isHidden: boolean("isHidden").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull()
+});
+var communityReports = pgTable("communityReports", {
+  id: serial("id").primaryKey(),
+  reportedByUserId: integer("reportedByUserId").notNull(),
+  postId: integer("postId"),
+  commentId: integer("commentId"),
+  reason: varchar("reason", { length: 255 }).notNull(),
+  status: varchar("status", { length: 40 }).default("pending").notNull(),
+  adminNotes: text("adminNotes"),
+  reviewedByUserId: integer("reviewedByUserId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  reviewedAt: timestamp("reviewedAt")
 });
 
 // server/_core/env.ts
@@ -1281,6 +1390,14 @@ async function sendNotification(channel, contact, userName, alert, emergencyToke
   if (!contact.phone) return { channel, status: "failed", errorMessage: "Contact has no phone number." };
   return sendTwilio(contact.phone, body, channel, idempotencyKey);
 }
+async function sendResponderDestinationNotification(channel, destination, incidentTitle, message, idempotencyKey) {
+  if (channel === "email") {
+    if (!destination.email) return { channel, status: "failed", errorMessage: `Destination ${destination.name} has no email configured.` };
+    return sendEmail(destination.email, incidentTitle, message, idempotencyKey);
+  }
+  if (!destination.phone) return { channel, status: "failed", errorMessage: `Destination ${destination.name} has no phone configured.` };
+  return sendTwilio(destination.phone, message, channel, idempotencyKey);
+}
 
 // server/rateLimit.ts
 var buckets = /* @__PURE__ */ new Map();
@@ -1852,10 +1969,28 @@ async function markIncidentSafe(db, userId, incidentId, note) {
   await addTimeline2(db, incidentId, "safe_marked", "User marked themselves safe");
   return { success: true };
 }
+function calculateHaversineDistanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 100) / 100;
+}
 var strongPassword = z2.string().min(8).max(128).refine((value) => /[A-Za-z]/.test(value) && /\d/.test(value), "Use at least 8 characters with a letter and a number.");
 var phoneNumber = z2.string().trim().regex(/^\+?[1-9][0-9\s().-]{5,31}$/, "Enter a valid phone number.");
 var registrationInput = z2.object({ name: z2.string().trim().min(2).max(120), email: z2.string().trim().email().max(320), phone: phoneNumber, password: strongPassword });
-var contactInput = z2.object({ name: z2.string().trim().min(2).max(120), phone: phoneNumber, email: z2.string().trim().email().max(320).optional().or(z2.literal("")), relationship: z2.string().trim().max(120).optional(), priority: z2.number().int().min(1).max(5).default(1), notifySms: z2.boolean().default(true), notifyEmail: z2.boolean().default(true), notifyWhatsApp: z2.boolean().default(false) });
+var contactInput = z2.object({
+  name: z2.string().trim().min(2).max(120),
+  phone: phoneNumber,
+  email: z2.string().trim().email().max(320).optional().or(z2.literal("")),
+  relationship: z2.string().trim().max(120).optional(),
+  priority: z2.number().int().min(1).max(5).default(1),
+  notifySms: z2.boolean().default(true),
+  notifyEmail: z2.boolean().default(true),
+  notifyWhatsApp: z2.boolean().default(false),
+  isNextOfKin: z2.boolean().default(false)
+});
 var appRouter = router({
   system: systemRouter,
   auth: router({
@@ -2121,7 +2256,7 @@ var appRouter = router({
         const existingEmail = (await db.select({ id: emergencyContacts.id }).from(emergencyContacts).where(and3(eq4(emergencyContacts.userId, ctx.user.id), eq4(emergencyContacts.email, normalizedEmail))).limit(1))[0];
         if (existingEmail) throw new TRPCError4({ code: "BAD_REQUEST", message: "A trusted contact with this email address already exists." });
       }
-      await db.insert(emergencyContacts).values({ userId: ctx.user.id, ...input, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null });
+      await db.insert(emergencyContacts).values({ userId: ctx.user.id, ...input, isNextOfKin: input.isNextOfKin ?? false, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null });
       const rows = await db.select().from(emergencyContacts).where(eq4(emergencyContacts.userId, ctx.user.id)).orderBy(desc(emergencyContacts.id)).limit(1);
       return rows[0];
     }),
@@ -2137,8 +2272,16 @@ var appRouter = router({
         const conflictEmail = await db.select({ id: emergencyContacts.id }).from(emergencyContacts).where(and3(eq4(emergencyContacts.userId, ctx.user.id), eq4(emergencyContacts.email, normalizedEmail))).limit(2);
         if (conflictEmail.some((c) => c.id !== input.id)) throw new TRPCError4({ code: "BAD_REQUEST", message: "Another trusted contact already has this email address." });
       }
-      await db.update(emergencyContacts).set({ name: input.name, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null, priority: input.priority, notifySms: input.notifySms, notifyEmail: input.notifyEmail, notifyWhatsApp: input.notifyWhatsApp, phoneVerifiedAt: existing[0].phone === cleanPhone ? existing[0].phoneVerifiedAt : null, emailVerifiedAt: existing[0].email === normalizedEmail ? existing[0].emailVerifiedAt : null }).where(eq4(emergencyContacts.id, input.id));
+      await db.update(emergencyContacts).set({ name: input.name, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null, priority: input.priority, notifySms: input.notifySms, notifyEmail: input.notifyEmail, notifyWhatsApp: input.notifyWhatsApp, isNextOfKin: input.isNextOfKin ?? existing[0].isNextOfKin, phoneVerifiedAt: existing[0].phone === cleanPhone ? existing[0].phoneVerifiedAt : null, emailVerifiedAt: existing[0].email === normalizedEmail ? existing[0].emailVerifiedAt : null }).where(eq4(emergencyContacts.id, input.id));
       return { success: true };
+    }),
+    toggleNextOfKin: protectedProcedure.input(z2.object({ id: z2.number().int() })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const existing = (await db.select().from(emergencyContacts).where(and3(eq4(emergencyContacts.id, input.id), eq4(emergencyContacts.userId, ctx.user.id))).limit(1))[0];
+      if (!existing) throw new TRPCError4({ code: "NOT_FOUND", message: "Contact not found." });
+      const nextVal = !existing.isNextOfKin;
+      await db.update(emergencyContacts).set({ isNextOfKin: nextVal }).where(eq4(emergencyContacts.id, input.id));
+      return { success: true, isNextOfKin: nextVal };
     }),
     remove: protectedProcedure.input(z2.object({ id: z2.number().int() })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
@@ -2223,6 +2366,50 @@ var appRouter = router({
           await db.update(sosAlerts).set({ notificationStatus: "failed" }).where(eq4(sosAlerts.id, alert.id));
           await addTimeline2(db, alert.id, "notification_failed", "No configured notification channels are available.");
         }
+      }
+      try {
+        const destinations = await db.select().from(emergencyResponderDestinations).where(eq4(emergencyResponderDestinations.enabled, true));
+        const emergencyLink = appBaseUrl2() ? `${appBaseUrl2()}/emergency/${encodeURIComponent(rawToken)}` : `/emergency/${encodeURIComponent(rawToken)}`;
+        for (const dest of destinations) {
+          const alertMsg = `EMERGENCY ALERT from SurakshaShe user #${ctx.user.id}. Coordinates: ${input.latitude.toFixed(6)}, ${input.longitude.toFixed(6)}. Live link: ${emergencyLink}`;
+          if (dest.notifySms && dest.phone) {
+            const res = await sendResponderDestinationNotification("sms", dest, "EMERGENCY ALERT", alertMsg, `sos-dest-${alert.id}-${dest.id}-sms`);
+            await addTimeline2(db, alert.id, "destination_dispatched", `${dest.name} (SMS): ${res.status === "sent" ? "delivered" : res.errorMessage || "unavailable"}`);
+          }
+          if (dest.notifyEmail && dest.email) {
+            const res = await sendResponderDestinationNotification("email", dest, `EMERGENCY ALERT: ${dest.name}`, alertMsg, `sos-dest-${alert.id}-${dest.id}-email`);
+            await addTimeline2(db, alert.id, "destination_dispatched", `${dest.name} (Email): ${res.status === "sent" ? "delivered" : res.errorMessage || "unavailable"}`);
+          }
+          if (dest.notifyWhatsApp && dest.phone) {
+            const res = await sendResponderDestinationNotification("whatsapp", dest, "EMERGENCY ALERT", alertMsg, `sos-dest-${alert.id}-${dest.id}-wa`);
+            await addTimeline2(db, alert.id, "destination_dispatched", `${dest.name} (WhatsApp): ${res.status === "sent" ? "delivered" : res.errorMessage || "unavailable"}`);
+          }
+        }
+      } catch (destErr) {
+        console.warn("[SOS Destination Alert Error]:", destErr);
+      }
+      try {
+        const nearbyUsers = await db.select().from(nearbyResponderSettings).where(eq4(nearbyResponderSettings.enabled, true));
+        let notifiedCount = 0;
+        for (const nearby of nearbyUsers) {
+          if (nearby.userId === ctx.user.id) continue;
+          if (nearby.lastLatitude == null || nearby.lastLongitude == null) continue;
+          const dist = calculateHaversineDistanceKm(input.latitude, input.longitude, nearby.lastLatitude, nearby.lastLongitude);
+          if (dist <= 5) {
+            await db.insert(nearbyAlertNotifications).values({
+              incidentId: alert.id,
+              responderUserId: nearby.userId,
+              distanceKm: dist,
+              status: "notified"
+            });
+            notifiedCount++;
+          }
+        }
+        if (notifiedCount > 0) {
+          await addTimeline2(db, alert.id, "nearby_alerted", `Alert dispatched to ${notifiedCount} opted-in responder(s) within 5 km`);
+        }
+      } catch (nearbyErr) {
+        console.warn("[SOS Nearby Alert Error]:", nearbyErr);
       }
       await triggerDeliveryWorkerImmediate();
       const currentAlert = (await db.select().from(sosAlerts).where(eq4(sosAlerts.id, alert.id)).limit(1))[0] || alert;
@@ -2453,6 +2640,339 @@ var appRouter = router({
       return db.select().from(vehicleReports).where(eq4(vehicleReports.reportedByUserId, ctx.user.id)).orderBy(desc(vehicleReports.createdAt));
     })
   }),
+  upload: router({
+    uploadFile: protectedProcedure.input(z2.object({
+      fileName: z2.string().min(1).max(255),
+      mimeType: z2.string().min(1).max(120),
+      base64Data: z2.string().min(1),
+      context: z2.enum(["profile", "evidence", "suspect", "vehicle", "other"]).default("vehicle")
+    })).mutation(async ({ ctx, input }) => {
+      const buffer = Buffer.from(input.base64Data, "base64");
+      const { fileKey, sizeBytes } = await saveUploadedFile(buffer, input.fileName, input.mimeType);
+      const db = await requireDb();
+      await db.insert(fileUploads).values({
+        uploadedByUserId: ctx.user.id,
+        fileKey,
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        sizeBytes,
+        context: input.context
+      });
+      return { fileKey, fileUrl: `/api/files/${fileKey}` };
+    })
+  }),
+  travel: router({
+    create: protectedProcedure.input(z2.object({
+      destination: z2.string().trim().min(1).max(500),
+      expectedArrival: z2.coerce.date(),
+      vehicleNumber: z2.string().trim().max(60).optional(),
+      vehicleType: z2.string().trim().max(60).optional(),
+      vehicleColor: z2.string().trim().max(60).optional(),
+      vehicleDescription: z2.string().trim().max(1e3).optional(),
+      vehiclePhotoKey: z2.string().optional(),
+      trustedContactIds: z2.array(z2.number().int()).optional()
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const existing = (await db.select().from(travelTrips).where(and3(eq4(travelTrips.userId, ctx.user.id), eq4(travelTrips.status, "active"))).limit(1))[0];
+      if (existing) {
+        throw new TRPCError4({ code: "CONFLICT", message: "You already have an active travel trip. Complete or cancel it first." });
+      }
+      const tripId = `TRIP-${randomBytes2(4).toString("hex").toUpperCase()}`;
+      const randNum = 1e5 + randomBytes2(3).readUIntBE(0, 3) % 9e5;
+      const verificationCode2 = `SK-${randNum}`;
+      const [trip] = await db.insert(travelTrips).values({
+        tripId,
+        userId: ctx.user.id,
+        destination: input.destination,
+        expectedArrival: input.expectedArrival,
+        vehicleNumber: input.vehicleNumber,
+        vehicleType: input.vehicleType,
+        vehicleColor: input.vehicleColor,
+        vehicleDescription: input.vehicleDescription,
+        vehiclePhotoKey: input.vehiclePhotoKey,
+        trustedContactIds: input.trustedContactIds ? JSON.stringify(input.trustedContactIds) : null,
+        verificationCode: verificationCode2,
+        status: "active"
+      }).returning();
+      await db.insert(auditLogs).values({
+        actorUserId: ctx.user.id,
+        action: "travel_trip_started",
+        targetType: "travelTrip",
+        targetId: trip.id,
+        metadata: JSON.stringify({ tripId, destination: input.destination })
+      });
+      return trip;
+    }),
+    active: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and3(eq4(travelTrips.userId, ctx.user.id), eq4(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) return null;
+      const locations = await db.select().from(travelLocations).where(eq4(travelLocations.tripId, trip.id)).orderBy(travelLocations.timestamp);
+      return { trip, locations };
+    }),
+    history: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      return db.select().from(travelTrips).where(eq4(travelTrips.userId, ctx.user.id)).orderBy(desc(travelTrips.createdAt)).limit(30);
+    }),
+    updateLocation: protectedProcedure.input(z2.object({
+      id: z2.number().int(),
+      latitude: z2.number().finite().min(-90).max(90),
+      longitude: z2.number().finite().min(-180).max(180),
+      accuracy: z2.number().finite().min(0).max(1e5).optional()
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and3(eq4(travelTrips.id, input.id), eq4(travelTrips.userId, ctx.user.id), eq4(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError4({ code: "NOT_FOUND", message: "Active trip not found." });
+      const now = /* @__PURE__ */ new Date();
+      await db.update(travelTrips).set({
+        lastLatitude: input.latitude,
+        lastLongitude: input.longitude,
+        lastAccuracy: input.accuracy ?? null,
+        lastLocationAt: now
+      }).where(eq4(travelTrips.id, trip.id));
+      await db.insert(travelLocations).values({
+        tripId: trip.id,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        accuracy: input.accuracy ?? null,
+        timestamp: now
+      });
+      return { success: true, timestamp: now };
+    }),
+    complete: protectedProcedure.input(z2.object({ id: z2.number().int() })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and3(eq4(travelTrips.id, input.id), eq4(travelTrips.userId, ctx.user.id), eq4(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError4({ code: "NOT_FOUND", message: "Active trip not found." });
+      await db.update(travelTrips).set({ status: "completed", completedAt: /* @__PURE__ */ new Date() }).where(eq4(travelTrips.id, trip.id));
+      await db.insert(auditLogs).values({ actorUserId: ctx.user.id, action: "travel_trip_completed", targetType: "travelTrip", targetId: trip.id });
+      return { success: true };
+    }),
+    cancel: protectedProcedure.input(z2.object({ id: z2.number().int() })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and3(eq4(travelTrips.id, input.id), eq4(travelTrips.userId, ctx.user.id), eq4(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError4({ code: "NOT_FOUND", message: "Active trip not found." });
+      await db.update(travelTrips).set({ status: "cancelled", completedAt: /* @__PURE__ */ new Date() }).where(eq4(travelTrips.id, trip.id));
+      return { success: true };
+    }),
+    triggerEmergency: protectedProcedure.input(z2.object({
+      id: z2.number().int(),
+      latitude: z2.number().finite().min(-90).max(90),
+      longitude: z2.number().finite().min(-180).max(180),
+      accuracy: z2.number().finite().min(0).max(1e5).optional()
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and3(eq4(travelTrips.id, input.id), eq4(travelTrips.userId, ctx.user.id), eq4(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError4({ code: "NOT_FOUND", message: "Active trip not found." });
+      await db.update(travelTrips).set({ status: "emergency" }).where(eq4(travelTrips.id, trip.id));
+      const rawToken = createSecureToken();
+      const now = /* @__PURE__ */ new Date();
+      const [alert] = await db.insert(sosAlerts).values({
+        userId: ctx.user.id,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        accuracy: input.accuracy ?? null,
+        address: `Travel trip ${trip.tripId} to ${trip.destination}`,
+        initialLatitude: input.latitude,
+        initialLongitude: input.longitude,
+        initialAccuracy: input.accuracy ?? null,
+        lastLocationAt: now,
+        emergencyTokenHash: hashSecureToken(rawToken),
+        emergencyTokenExpiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1e3),
+        notificationStatus: "pending",
+        activatedAt: now
+      }).returning();
+      await addTimeline2(db, alert.id, "activated", `Travel Emergency triggered for trip ${trip.tripId}`);
+      await queueSosPriority(db, alert.id, ctx.user.id, 1);
+      await triggerDeliveryWorkerImmediate();
+      return {
+        success: true,
+        alert,
+        emergencyLink: appBaseUrl2() ? `${appBaseUrl2()}/emergency/${encodeURIComponent(rawToken)}` : `/emergency/${encodeURIComponent(rawToken)}`
+      };
+    })
+  }),
+  nearby: router({
+    getSettings: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const setting = (await db.select().from(nearbyResponderSettings).where(eq4(nearbyResponderSettings.userId, ctx.user.id)).limit(1))[0];
+      return setting || { enabled: false, radiusKm: 5, lastLatitude: null, lastLongitude: null, lastLocationAt: null };
+    }),
+    updateSettings: protectedProcedure.input(z2.object({
+      enabled: z2.boolean(),
+      latitude: z2.number().finite().min(-90).max(90).optional(),
+      longitude: z2.number().finite().min(-180).max(180).optional()
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const now = /* @__PURE__ */ new Date();
+      await db.insert(nearbyResponderSettings).values({
+        userId: ctx.user.id,
+        enabled: input.enabled,
+        lastLatitude: input.latitude ?? null,
+        lastLongitude: input.longitude ?? null,
+        lastLocationAt: input.latitude != null ? now : null,
+        radiusKm: 5
+      }).onConflictDoUpdate({
+        target: nearbyResponderSettings.userId,
+        set: {
+          enabled: input.enabled,
+          ...input.latitude != null ? { lastLatitude: input.latitude, lastLongitude: input.longitude, lastLocationAt: now } : {},
+          updatedAt: now
+        }
+      });
+      return { success: true };
+    }),
+    activeAlerts: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const setting = (await db.select().from(nearbyResponderSettings).where(eq4(nearbyResponderSettings.userId, ctx.user.id)).limit(1))[0];
+      if (!setting || !setting.enabled || setting.lastLatitude == null || setting.lastLongitude == null) {
+        return [];
+      }
+      const activeList = await db.select({
+        id: sosAlerts.id,
+        latitude: sosAlerts.latitude,
+        longitude: sosAlerts.longitude,
+        status: sosAlerts.status,
+        activatedAt: sosAlerts.activatedAt,
+        userId: sosAlerts.userId
+      }).from(sosAlerts).where(inArray(sosAlerts.status, ["active", "acknowledged"]));
+      const results = [];
+      for (const alert of activeList) {
+        if (alert.userId === ctx.user.id) continue;
+        const dist = calculateHaversineDistanceKm(setting.lastLatitude, setting.lastLongitude, alert.latitude, alert.longitude);
+        if (dist <= 5) {
+          const ack = (await db.select().from(nearbyAlertNotifications).where(and3(eq4(nearbyAlertNotifications.incidentId, alert.id), eq4(nearbyAlertNotifications.responderUserId, ctx.user.id))).limit(1))[0];
+          results.push({
+            incidentId: alert.id,
+            distanceKm: dist,
+            activatedAt: alert.activatedAt,
+            status: alert.status,
+            myResponseStatus: ack?.status || "notified",
+            acknowledgedAt: ack?.acknowledgedAt || null
+          });
+        }
+      }
+      return results;
+    }),
+    respond: protectedProcedure.input(z2.object({
+      incidentId: z2.number().int(),
+      response: z2.enum(["responding", "acknowledged"])
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const responder = (await db.select().from(users).where(eq4(users.id, ctx.user.id)).limit(1))[0];
+      const responderName = responder?.name || "A community responder";
+      const now = /* @__PURE__ */ new Date();
+      const existing = (await db.select().from(nearbyAlertNotifications).where(and3(eq4(nearbyAlertNotifications.incidentId, input.incidentId), eq4(nearbyAlertNotifications.responderUserId, ctx.user.id))).limit(1))[0];
+      if (existing) {
+        await db.update(nearbyAlertNotifications).set({
+          status: input.response,
+          acknowledgedAt: now
+        }).where(eq4(nearbyAlertNotifications.id, existing.id));
+      } else {
+        await db.insert(nearbyAlertNotifications).values({
+          incidentId: input.incidentId,
+          responderUserId: ctx.user.id,
+          distanceKm: 0,
+          status: input.response,
+          acknowledgedAt: now
+        });
+      }
+      await addTimeline2(
+        db,
+        input.incidentId,
+        input.response === "responding" ? "responder_responding" : "responder_acknowledged",
+        `${responderName} responded: ${input.response === "responding" ? "Help is on the way!" : "Alert acknowledged."}`
+      );
+      await db.update(sosAlerts).set({ status: "acknowledged" }).where(and3(eq4(sosAlerts.id, input.incidentId), eq4(sosAlerts.status, "active")));
+      return { success: true };
+    })
+  }),
+  community: router({
+    posts: protectedProcedure.input(z2.object({
+      category: z2.string().optional(),
+      limit: z2.number().int().min(1).max(50).default(20),
+      offset: z2.number().int().min(0).default(0)
+    })).query(async ({ input }) => {
+      const db = await requireDb();
+      const query = db.select({
+        id: communityPosts.id,
+        userId: communityPosts.userId,
+        authorName: users.name,
+        title: communityPosts.title,
+        content: communityPosts.content,
+        category: communityPosts.category,
+        locationName: communityPosts.locationName,
+        createdAt: communityPosts.createdAt
+      }).from(communityPosts).leftJoin(users, eq4(communityPosts.userId, users.id)).where(and3(eq4(communityPosts.isHidden, false), input.category ? eq4(communityPosts.category, input.category) : void 0)).orderBy(desc(communityPosts.createdAt)).limit(input.limit).offset(input.offset);
+      return query;
+    }),
+    createPost: protectedProcedure.input(z2.object({
+      title: z2.string().trim().min(3).max(255),
+      content: z2.string().trim().min(5).max(5e3),
+      category: z2.enum(["safety_tip", "alert", "advice", "experience", "general"]).default("safety_tip"),
+      locationName: z2.string().trim().max(120).optional()
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const [post] = await db.insert(communityPosts).values({
+        userId: ctx.user.id,
+        title: input.title,
+        content: input.content,
+        category: input.category,
+        locationName: input.locationName
+      }).returning();
+      return post;
+    }),
+    getPost: protectedProcedure.input(z2.object({ id: z2.number().int() })).query(async ({ input }) => {
+      const db = await requireDb();
+      const post = (await db.select({
+        id: communityPosts.id,
+        userId: communityPosts.userId,
+        authorName: users.name,
+        title: communityPosts.title,
+        content: communityPosts.content,
+        category: communityPosts.category,
+        locationName: communityPosts.locationName,
+        createdAt: communityPosts.createdAt,
+        isHidden: communityPosts.isHidden
+      }).from(communityPosts).leftJoin(users, eq4(communityPosts.userId, users.id)).where(and3(eq4(communityPosts.id, input.id), eq4(communityPosts.isHidden, false))).limit(1))[0];
+      if (!post) throw new TRPCError4({ code: "NOT_FOUND", message: "Post not found or hidden." });
+      const comments = await db.select({
+        id: communityComments.id,
+        userId: communityComments.userId,
+        authorName: users.name,
+        content: communityComments.content,
+        createdAt: communityComments.createdAt
+      }).from(communityComments).leftJoin(users, eq4(communityComments.userId, users.id)).where(and3(eq4(communityComments.postId, post.id), eq4(communityComments.isHidden, false))).orderBy(communityComments.createdAt);
+      return { post, comments };
+    }),
+    addComment: protectedProcedure.input(z2.object({
+      postId: z2.number().int(),
+      content: z2.string().trim().min(1).max(2e3)
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const post = (await db.select().from(communityPosts).where(and3(eq4(communityPosts.id, input.postId), eq4(communityPosts.isHidden, false))).limit(1))[0];
+      if (!post) throw new TRPCError4({ code: "NOT_FOUND", message: "Post not found." });
+      const [comment] = await db.insert(communityComments).values({
+        postId: input.postId,
+        userId: ctx.user.id,
+        content: input.content
+      }).returning();
+      return comment;
+    }),
+    report: protectedProcedure.input(z2.object({
+      postId: z2.number().int().optional(),
+      commentId: z2.number().int().optional(),
+      reason: z2.string().trim().min(3).max(255)
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await db.insert(communityReports).values({
+        reportedByUserId: ctx.user.id,
+        postId: input.postId ?? null,
+        commentId: input.commentId ?? null,
+        reason: input.reason
+      });
+      return { success: true };
+    })
+  }),
   admin: router({
     users: router({
       list: adminProcedure.input(z2.object({ search: z2.string().trim().max(120).optional() }).optional()).query(async ({ input }) => {
@@ -2493,6 +3013,131 @@ var appRouter = router({
     vehiclesList: adminProcedure.query(async () => {
       const db = await requireDb();
       return db.select().from(vehicleReports).orderBy(desc(vehicleReports.createdAt));
+    }),
+    responderDestinations: router({
+      list: adminProcedure.query(async () => {
+        const db = await requireDb();
+        const rows = await db.select().from(emergencyResponderDestinations).orderBy(emergencyResponderDestinations.priority, emergencyResponderDestinations.name);
+        if (rows.length === 0) {
+          await db.insert(emergencyResponderDestinations).values([
+            { name: "India 112 National Emergency", type: "national_emergency", phone: "112", enabled: true, priority: 1, notes: "All-in-one national emergency number in India" },
+            { name: "Local Police Control Room", type: "police", phone: "100", enabled: true, priority: 2, notes: "State / District police dispatch" },
+            { name: "Women Safety NGO Helpline", type: "ngo", phone: "1091", enabled: true, priority: 3, notes: "NGO & crisis response network" },
+            { name: "Emergency Coordinator", type: "coordinator", enabled: false, priority: 4, notes: "Designated organization safety lead" }
+          ]);
+          return db.select().from(emergencyResponderDestinations).orderBy(emergencyResponderDestinations.priority, emergencyResponderDestinations.name);
+        }
+        return rows;
+      }),
+      upsert: adminProcedure.input(z2.object({
+        id: z2.number().int().optional(),
+        name: z2.string().trim().min(2).max(120),
+        type: z2.enum(["national_emergency", "police", "ngo", "coordinator"]),
+        phone: z2.string().trim().optional().or(z2.literal("")),
+        email: z2.string().trim().email().optional().or(z2.literal("")),
+        notifySms: z2.boolean().default(false),
+        notifyEmail: z2.boolean().default(false),
+        notifyWhatsApp: z2.boolean().default(false),
+        enabled: z2.boolean().default(true),
+        priority: z2.number().int().min(1).max(10).default(1),
+        notes: z2.string().trim().max(500).optional()
+      })).mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        if (input.id) {
+          await db.update(emergencyResponderDestinations).set({
+            name: input.name,
+            type: input.type,
+            phone: input.phone || null,
+            email: input.email || null,
+            notifySms: input.notifySms,
+            notifyEmail: input.notifyEmail,
+            notifyWhatsApp: input.notifyWhatsApp,
+            enabled: input.enabled,
+            priority: input.priority,
+            notes: input.notes || null
+          }).where(eq4(emergencyResponderDestinations.id, input.id));
+        } else {
+          await db.insert(emergencyResponderDestinations).values({
+            name: input.name,
+            type: input.type,
+            phone: input.phone || null,
+            email: input.email || null,
+            notifySms: input.notifySms,
+            notifyEmail: input.notifyEmail,
+            notifyWhatsApp: input.notifyWhatsApp,
+            enabled: input.enabled,
+            priority: input.priority,
+            notes: input.notes || null
+          });
+        }
+        await db.insert(auditLogs).values({
+          actorUserId: ctx.user.id,
+          action: "responder_destination_configured",
+          metadata: JSON.stringify({ name: input.name, type: input.type })
+        });
+        return { success: true };
+      }),
+      toggle: adminProcedure.input(z2.object({ id: z2.number().int() })).mutation(async ({ input }) => {
+        const db = await requireDb();
+        const dest = (await db.select().from(emergencyResponderDestinations).where(eq4(emergencyResponderDestinations.id, input.id)).limit(1))[0];
+        if (!dest) throw new TRPCError4({ code: "NOT_FOUND", message: "Destination not found." });
+        await db.update(emergencyResponderDestinations).set({ enabled: !dest.enabled }).where(eq4(emergencyResponderDestinations.id, input.id));
+        return { success: true, enabled: !dest.enabled };
+      }),
+      remove: adminProcedure.input(z2.object({ id: z2.number().int() })).mutation(async ({ input }) => {
+        const db = await requireDb();
+        await db.delete(emergencyResponderDestinations).where(eq4(emergencyResponderDestinations.id, input.id));
+        return { success: true };
+      })
+    }),
+    community: router({
+      reports: adminProcedure.query(async () => {
+        const db = await requireDb();
+        return db.select({
+          id: communityReports.id,
+          reporterId: communityReports.reportedByUserId,
+          reporterName: users.name,
+          postId: communityReports.postId,
+          commentId: communityReports.commentId,
+          reason: communityReports.reason,
+          status: communityReports.status,
+          createdAt: communityReports.createdAt
+        }).from(communityReports).leftJoin(users, eq4(communityReports.reportedByUserId, users.id)).orderBy(desc(communityReports.createdAt));
+      }),
+      moderate: adminProcedure.input(z2.object({
+        reportId: z2.number().int(),
+        action: z2.enum(["hide_content", "unhide_content", "dismiss"]),
+        adminNotes: z2.string().optional()
+      })).mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const report = (await db.select().from(communityReports).where(eq4(communityReports.id, input.reportId)).limit(1))[0];
+        if (!report) throw new TRPCError4({ code: "NOT_FOUND", message: "Report not found." });
+        if (input.action === "hide_content") {
+          if (report.postId) {
+            await db.update(communityPosts).set({ isHidden: true }).where(eq4(communityPosts.id, report.postId));
+          }
+          if (report.commentId) {
+            await db.update(communityComments).set({ isHidden: true }).where(eq4(communityComments.id, report.commentId));
+          }
+          await db.update(communityReports).set({ status: "actioned", adminNotes: input.adminNotes || "Content hidden", reviewedByUserId: ctx.user.id, reviewedAt: /* @__PURE__ */ new Date() }).where(eq4(communityReports.id, report.id));
+        } else if (input.action === "unhide_content") {
+          if (report.postId) {
+            await db.update(communityPosts).set({ isHidden: false }).where(eq4(communityPosts.id, report.postId));
+          }
+          if (report.commentId) {
+            await db.update(communityComments).set({ isHidden: false }).where(eq4(communityComments.id, report.commentId));
+          }
+          await db.update(communityReports).set({ status: "reviewed", adminNotes: input.adminNotes || "Content restored", reviewedByUserId: ctx.user.id, reviewedAt: /* @__PURE__ */ new Date() }).where(eq4(communityReports.id, report.id));
+        } else if (input.action === "dismiss") {
+          await db.update(communityReports).set({ status: "dismissed", adminNotes: input.adminNotes || "Report dismissed", reviewedByUserId: ctx.user.id, reviewedAt: /* @__PURE__ */ new Date() }).where(eq4(communityReports.id, report.id));
+        }
+        await db.insert(auditLogs).values({
+          actorUserId: ctx.user.id,
+          action: "community_content_moderated",
+          metadata: JSON.stringify({ reportId: report.id, action: input.action })
+        });
+        return { success: true };
+      })
     })
   })
 });

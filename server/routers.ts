@@ -22,6 +22,14 @@ import {
   emergencyAccessTokens,
   userSessions,
   sosEscalationPolicies,
+  travelTrips,
+  travelLocations,
+  nearbyResponderSettings,
+  nearbyAlertNotifications,
+  emergencyResponderDestinations,
+  communityPosts,
+  communityComments,
+  communityReports,
 } from "../drizzle/schema";
 import {
   createSecureToken,
@@ -36,7 +44,13 @@ import {
 } from "./db";
 import { getSupabaseAdmin, getSupabaseAnonClient, isSupabaseConfigured } from "./supabase";
 import { saveUploadedFile } from "./storage";
-import { cleanPhoneNumber, isEmailConfigured, sendPasswordResetEmail, sendVerificationNotification } from "./notificationService";
+import {
+  cleanPhoneNumber,
+  isEmailConfigured,
+  sendPasswordResetEmail,
+  sendVerificationNotification,
+  sendResponderDestinationNotification,
+} from "./notificationService";
 import { assertRateLimit, requestIp } from "./rateLimit";
 import { processExpiredCheckIns } from "./checkInService";
 import { processDeliveryQueues, processSosEscalations, queueSosPriority, triggerDeliveryWorkerImmediate } from "./deliveryQueueService";
@@ -157,10 +171,32 @@ async function markIncidentSafe(db: any, userId: number, incidentId: number, not
   return { success: true } as const;
 }
 
+export function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 100) / 100;
+}
+
 const strongPassword = z.string().min(8).max(128).refine(value => /[A-Za-z]/.test(value) && /\d/.test(value), "Use at least 8 characters with a letter and a number.");
 const phoneNumber = z.string().trim().regex(/^\+?[1-9][0-9\s().-]{5,31}$/, "Enter a valid phone number.");
 const registrationInput = z.object({ name: z.string().trim().min(2).max(120), email: z.string().trim().email().max(320), phone: phoneNumber, password: strongPassword });
-const contactInput = z.object({ name: z.string().trim().min(2).max(120), phone: phoneNumber, email: z.string().trim().email().max(320).optional().or(z.literal("")), relationship: z.string().trim().max(120).optional(), priority: z.number().int().min(1).max(5).default(1), notifySms: z.boolean().default(true), notifyEmail: z.boolean().default(true), notifyWhatsApp: z.boolean().default(false) });
+const contactInput = z.object({
+  name: z.string().trim().min(2).max(120),
+  phone: phoneNumber,
+  email: z.string().trim().email().max(320).optional().or(z.literal("")),
+  relationship: z.string().trim().max(120).optional(),
+  priority: z.number().int().min(1).max(5).default(1),
+  notifySms: z.boolean().default(true),
+  notifyEmail: z.boolean().default(true),
+  notifyWhatsApp: z.boolean().default(false),
+  isNextOfKin: z.boolean().default(false),
+});
 
 export const appRouter = router({
   system: systemRouter,
@@ -444,7 +480,7 @@ export const appRouter = router({
         const existingEmail = (await db.select({ id: emergencyContacts.id }).from(emergencyContacts).where(and(eq(emergencyContacts.userId, ctx.user.id), eq(emergencyContacts.email, normalizedEmail))).limit(1))[0];
         if (existingEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "A trusted contact with this email address already exists." });
       }
-      await db.insert(emergencyContacts).values({ userId: ctx.user.id, ...input, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null });
+      await db.insert(emergencyContacts).values({ userId: ctx.user.id, ...input, isNextOfKin: input.isNextOfKin ?? false, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null });
       const rows = await db.select().from(emergencyContacts).where(eq(emergencyContacts.userId, ctx.user.id)).orderBy(desc(emergencyContacts.id)).limit(1);
       return rows[0];
     }),
@@ -460,8 +496,16 @@ export const appRouter = router({
         const conflictEmail = await db.select({ id: emergencyContacts.id }).from(emergencyContacts).where(and(eq(emergencyContacts.userId, ctx.user.id), eq(emergencyContacts.email, normalizedEmail))).limit(2);
         if (conflictEmail.some((c: any) => c.id !== input.id)) throw new TRPCError({ code: "BAD_REQUEST", message: "Another trusted contact already has this email address." });
       }
-      await db.update(emergencyContacts).set({ name: input.name, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null, priority: input.priority, notifySms: input.notifySms, notifyEmail: input.notifyEmail, notifyWhatsApp: input.notifyWhatsApp, phoneVerifiedAt: existing[0].phone === cleanPhone ? existing[0].phoneVerifiedAt : null, emailVerifiedAt: existing[0].email === normalizedEmail ? existing[0].emailVerifiedAt : null }).where(eq(emergencyContacts.id, input.id));
+      await db.update(emergencyContacts).set({ name: input.name, phone: cleanPhone, email: normalizedEmail, relationship: input.relationship || null, priority: input.priority, notifySms: input.notifySms, notifyEmail: input.notifyEmail, notifyWhatsApp: input.notifyWhatsApp, isNextOfKin: input.isNextOfKin ?? existing[0].isNextOfKin, phoneVerifiedAt: existing[0].phone === cleanPhone ? existing[0].phoneVerifiedAt : null, emailVerifiedAt: existing[0].email === normalizedEmail ? existing[0].emailVerifiedAt : null }).where(eq(emergencyContacts.id, input.id));
       return { success: true } as const;
+    }),
+    toggleNextOfKin: protectedProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const existing = (await db.select().from(emergencyContacts).where(and(eq(emergencyContacts.id, input.id), eq(emergencyContacts.userId, ctx.user.id))).limit(1))[0];
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found." });
+      const nextVal = !existing.isNextOfKin;
+      await db.update(emergencyContacts).set({ isNextOfKin: nextVal }).where(eq(emergencyContacts.id, input.id));
+      return { success: true, isNextOfKin: nextVal } as const;
     }),
     remove: protectedProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
@@ -548,6 +592,54 @@ export const appRouter = router({
           await addTimeline(db, alert.id, "notification_failed", "No configured notification channels are available.");
         }
       }
+      // 1. Dispatch to configured emergency responder destinations (112, Police, NGO, coordinator)
+      try {
+        const destinations = await db.select().from(emergencyResponderDestinations).where(eq(emergencyResponderDestinations.enabled, true));
+        const emergencyLink = appBaseUrl() ? `${appBaseUrl()}/emergency/${encodeURIComponent(rawToken)}` : `/emergency/${encodeURIComponent(rawToken)}`;
+        for (const dest of destinations) {
+          const alertMsg = `EMERGENCY ALERT from SurakshaShe user #${ctx.user.id}. Coordinates: ${input.latitude.toFixed(6)}, ${input.longitude.toFixed(6)}. Live link: ${emergencyLink}`;
+          if (dest.notifySms && dest.phone) {
+            const res = await sendResponderDestinationNotification("sms", dest, "EMERGENCY ALERT", alertMsg, `sos-dest-${alert.id}-${dest.id}-sms`);
+            await addTimeline(db, alert.id, "destination_dispatched", `${dest.name} (SMS): ${res.status === "sent" ? "delivered" : res.errorMessage || "unavailable"}`);
+          }
+          if (dest.notifyEmail && dest.email) {
+            const res = await sendResponderDestinationNotification("email", dest, `EMERGENCY ALERT: ${dest.name}`, alertMsg, `sos-dest-${alert.id}-${dest.id}-email`);
+            await addTimeline(db, alert.id, "destination_dispatched", `${dest.name} (Email): ${res.status === "sent" ? "delivered" : res.errorMessage || "unavailable"}`);
+          }
+          if (dest.notifyWhatsApp && dest.phone) {
+            const res = await sendResponderDestinationNotification("whatsapp", dest, "EMERGENCY ALERT", alertMsg, `sos-dest-${alert.id}-${dest.id}-wa`);
+            await addTimeline(db, alert.id, "destination_dispatched", `${dest.name} (WhatsApp): ${res.status === "sent" ? "delivered" : res.errorMessage || "unavailable"}`);
+          }
+        }
+      } catch (destErr) {
+        console.warn("[SOS Destination Alert Error]:", destErr);
+      }
+
+      // 2. Alert opted-in nearby responders within 5 km
+      try {
+        const nearbyUsers = await db.select().from(nearbyResponderSettings).where(eq(nearbyResponderSettings.enabled, true));
+        let notifiedCount = 0;
+        for (const nearby of nearbyUsers) {
+          if (nearby.userId === ctx.user.id) continue;
+          if (nearby.lastLatitude == null || nearby.lastLongitude == null) continue;
+          const dist = calculateHaversineDistanceKm(input.latitude, input.longitude, nearby.lastLatitude, nearby.lastLongitude);
+          if (dist <= 5.0) {
+            await db.insert(nearbyAlertNotifications).values({
+              incidentId: alert.id,
+              responderUserId: nearby.userId,
+              distanceKm: dist,
+              status: "notified",
+            });
+            notifiedCount++;
+          }
+        }
+        if (notifiedCount > 0) {
+          await addTimeline(db, alert.id, "nearby_alerted", `Alert dispatched to ${notifiedCount} opted-in responder(s) within 5 km`);
+        }
+      } catch (nearbyErr) {
+        console.warn("[SOS Nearby Alert Error]:", nearbyErr);
+      }
+
       await triggerDeliveryWorkerImmediate();
       const currentAlert = (await db.select().from(sosAlerts).where(eq(sosAlerts.id, alert.id)).limit(1))[0] || alert;
       return { alert: currentAlert, emergencyLink: appBaseUrl() ? `${appBaseUrl()}/emergency/${encodeURIComponent(rawToken)}` : `/emergency/${encodeURIComponent(rawToken)}` };
@@ -778,6 +870,393 @@ export const appRouter = router({
     }),
   }),
 
+  upload: router({
+    uploadFile: protectedProcedure
+      .input(z.object({
+        fileName: z.string().min(1).max(255),
+        mimeType: z.string().min(1).max(120),
+        base64Data: z.string().min(1),
+        context: z.enum(["profile", "evidence", "suspect", "vehicle", "other"]).default("vehicle"),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const buffer = Buffer.from(input.base64Data, "base64");
+        const { fileKey, sizeBytes } = await saveUploadedFile(buffer, input.fileName, input.mimeType);
+        const db = await requireDb();
+        await db.insert(fileUploads).values({
+          uploadedByUserId: ctx.user.id,
+          fileKey,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes,
+          context: input.context,
+        });
+        return { fileKey, fileUrl: `/api/files/${fileKey}` };
+      }),
+  }),
+
+  travel: router({
+    create: protectedProcedure.input(z.object({
+      destination: z.string().trim().min(1).max(500),
+      expectedArrival: z.coerce.date(),
+      vehicleNumber: z.string().trim().max(60).optional(),
+      vehicleType: z.string().trim().max(60).optional(),
+      vehicleColor: z.string().trim().max(60).optional(),
+      vehicleDescription: z.string().trim().max(1000).optional(),
+      vehiclePhotoKey: z.string().optional(),
+      trustedContactIds: z.array(z.number().int()).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const existing = (await db.select().from(travelTrips).where(and(eq(travelTrips.userId, ctx.user.id), eq(travelTrips.status, "active"))).limit(1))[0];
+      if (existing) {
+        throw new TRPCError({ code: "CONFLICT", message: "You already have an active travel trip. Complete or cancel it first." });
+      }
+
+      const tripId = `TRIP-${randomBytes(4).toString("hex").toUpperCase()}`;
+      const randNum = 100000 + (randomBytes(3).readUIntBE(0, 3) % 900000);
+      const verificationCode = `SK-${randNum}`;
+
+      const [trip] = await db.insert(travelTrips).values({
+        tripId,
+        userId: ctx.user.id,
+        destination: input.destination,
+        expectedArrival: input.expectedArrival,
+        vehicleNumber: input.vehicleNumber,
+        vehicleType: input.vehicleType,
+        vehicleColor: input.vehicleColor,
+        vehicleDescription: input.vehicleDescription,
+        vehiclePhotoKey: input.vehiclePhotoKey,
+        trustedContactIds: input.trustedContactIds ? JSON.stringify(input.trustedContactIds) : null,
+        verificationCode,
+        status: "active",
+      }).returning();
+
+      await db.insert(auditLogs).values({
+        actorUserId: ctx.user.id,
+        action: "travel_trip_started",
+        targetType: "travelTrip",
+        targetId: trip.id,
+        metadata: JSON.stringify({ tripId, destination: input.destination }),
+      });
+
+      return trip;
+    }),
+
+    active: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and(eq(travelTrips.userId, ctx.user.id), eq(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) return null;
+      const locations = await db.select().from(travelLocations).where(eq(travelLocations.tripId, trip.id)).orderBy(travelLocations.timestamp);
+      return { trip, locations };
+    }),
+
+    history: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      return db.select().from(travelTrips).where(eq(travelTrips.userId, ctx.user.id)).orderBy(desc(travelTrips.createdAt)).limit(30);
+    }),
+
+    updateLocation: protectedProcedure.input(z.object({
+      id: z.number().int(),
+      latitude: z.number().finite().min(-90).max(90),
+      longitude: z.number().finite().min(-180).max(180),
+      accuracy: z.number().finite().min(0).max(100000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and(eq(travelTrips.id, input.id), eq(travelTrips.userId, ctx.user.id), eq(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "Active trip not found." });
+
+      const now = new Date();
+      await db.update(travelTrips).set({
+        lastLatitude: input.latitude,
+        lastLongitude: input.longitude,
+        lastAccuracy: input.accuracy ?? null,
+        lastLocationAt: now,
+      }).where(eq(travelTrips.id, trip.id));
+
+      await db.insert(travelLocations).values({
+        tripId: trip.id,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        accuracy: input.accuracy ?? null,
+        timestamp: now,
+      });
+
+      return { success: true, timestamp: now } as const;
+    }),
+
+    complete: protectedProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and(eq(travelTrips.id, input.id), eq(travelTrips.userId, ctx.user.id), eq(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "Active trip not found." });
+      await db.update(travelTrips).set({ status: "completed", completedAt: new Date() }).where(eq(travelTrips.id, trip.id));
+      await db.insert(auditLogs).values({ actorUserId: ctx.user.id, action: "travel_trip_completed", targetType: "travelTrip", targetId: trip.id });
+      return { success: true } as const;
+    }),
+
+    cancel: protectedProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and(eq(travelTrips.id, input.id), eq(travelTrips.userId, ctx.user.id), eq(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "Active trip not found." });
+      await db.update(travelTrips).set({ status: "cancelled", completedAt: new Date() }).where(eq(travelTrips.id, trip.id));
+      return { success: true } as const;
+    }),
+
+    triggerEmergency: protectedProcedure.input(z.object({
+      id: z.number().int(),
+      latitude: z.number().finite().min(-90).max(90),
+      longitude: z.number().finite().min(-180).max(180),
+      accuracy: z.number().finite().min(0).max(100000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const trip = (await db.select().from(travelTrips).where(and(eq(travelTrips.id, input.id), eq(travelTrips.userId, ctx.user.id), eq(travelTrips.status, "active"))).limit(1))[0];
+      if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "Active trip not found." });
+
+      await db.update(travelTrips).set({ status: "emergency" }).where(eq(travelTrips.id, trip.id));
+      const rawToken = createSecureToken();
+      const now = new Date();
+      const [alert] = await db.insert(sosAlerts).values({
+        userId: ctx.user.id,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        accuracy: input.accuracy ?? null,
+        address: `Travel trip ${trip.tripId} to ${trip.destination}`,
+        initialLatitude: input.latitude,
+        initialLongitude: input.longitude,
+        initialAccuracy: input.accuracy ?? null,
+        lastLocationAt: now,
+        emergencyTokenHash: hashSecureToken(rawToken),
+        emergencyTokenExpiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+        notificationStatus: "pending",
+        activatedAt: now,
+      }).returning();
+
+      await addTimeline(db, alert.id, "activated", `Travel Emergency triggered for trip ${trip.tripId}`);
+      await queueSosPriority(db, alert.id, ctx.user.id, 1);
+      await triggerDeliveryWorkerImmediate();
+
+      return {
+        success: true,
+        alert,
+        emergencyLink: appBaseUrl() ? `${appBaseUrl()}/emergency/${encodeURIComponent(rawToken)}` : `/emergency/${encodeURIComponent(rawToken)}`,
+      };
+    }),
+  }),
+
+  nearby: router({
+    getSettings: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const setting = (await db.select().from(nearbyResponderSettings).where(eq(nearbyResponderSettings.userId, ctx.user.id)).limit(1))[0];
+      return setting || { enabled: false, radiusKm: 5.0, lastLatitude: null, lastLongitude: null, lastLocationAt: null };
+    }),
+
+    updateSettings: protectedProcedure.input(z.object({
+      enabled: z.boolean(),
+      latitude: z.number().finite().min(-90).max(90).optional(),
+      longitude: z.number().finite().min(-180).max(180).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const now = new Date();
+      await db.insert(nearbyResponderSettings).values({
+        userId: ctx.user.id,
+        enabled: input.enabled,
+        lastLatitude: input.latitude ?? null,
+        lastLongitude: input.longitude ?? null,
+        lastLocationAt: input.latitude != null ? now : null,
+        radiusKm: 5.0,
+      }).onConflictDoUpdate({
+        target: nearbyResponderSettings.userId,
+        set: {
+          enabled: input.enabled,
+          ...(input.latitude != null ? { lastLatitude: input.latitude, lastLongitude: input.longitude, lastLocationAt: now } : {}),
+          updatedAt: now,
+        },
+      });
+      return { success: true } as const;
+    }),
+
+    activeAlerts: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const setting = (await db.select().from(nearbyResponderSettings).where(eq(nearbyResponderSettings.userId, ctx.user.id)).limit(1))[0];
+      if (!setting || !setting.enabled || setting.lastLatitude == null || setting.lastLongitude == null) {
+        return [];
+      }
+
+      const activeList = await db.select({
+        id: sosAlerts.id,
+        latitude: sosAlerts.latitude,
+        longitude: sosAlerts.longitude,
+        status: sosAlerts.status,
+        activatedAt: sosAlerts.activatedAt,
+        userId: sosAlerts.userId,
+      }).from(sosAlerts).where(inArray(sosAlerts.status, ["active", "acknowledged"]));
+
+      const results = [];
+      for (const alert of activeList) {
+        if (alert.userId === ctx.user.id) continue;
+        const dist = calculateHaversineDistanceKm(setting.lastLatitude, setting.lastLongitude, alert.latitude, alert.longitude);
+        if (dist <= 5.0) {
+          const ack = (await db.select().from(nearbyAlertNotifications).where(and(eq(nearbyAlertNotifications.incidentId, alert.id), eq(nearbyAlertNotifications.responderUserId, ctx.user.id))).limit(1))[0];
+          results.push({
+            incidentId: alert.id,
+            distanceKm: dist,
+            activatedAt: alert.activatedAt,
+            status: alert.status,
+            myResponseStatus: ack?.status || "notified",
+            acknowledgedAt: ack?.acknowledgedAt || null,
+          });
+        }
+      }
+      return results;
+    }),
+
+    respond: protectedProcedure.input(z.object({
+      incidentId: z.number().int(),
+      response: z.enum(["responding", "acknowledged"]),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const responder = (await db.select().from(users).where(eq(users.id, ctx.user.id)).limit(1))[0];
+      const responderName = responder?.name || "A community responder";
+      const now = new Date();
+
+      const existing = (await db.select().from(nearbyAlertNotifications).where(and(eq(nearbyAlertNotifications.incidentId, input.incidentId), eq(nearbyAlertNotifications.responderUserId, ctx.user.id))).limit(1))[0];
+      if (existing) {
+        await db.update(nearbyAlertNotifications).set({
+          status: input.response,
+          acknowledgedAt: now,
+        }).where(eq(nearbyAlertNotifications.id, existing.id));
+      } else {
+        await db.insert(nearbyAlertNotifications).values({
+          incidentId: input.incidentId,
+          responderUserId: ctx.user.id,
+          distanceKm: 0,
+          status: input.response,
+          acknowledgedAt: now,
+        });
+      }
+
+      await addTimeline(
+        db,
+        input.incidentId,
+        input.response === "responding" ? "responder_responding" : "responder_acknowledged",
+        `${responderName} responded: ${input.response === "responding" ? "Help is on the way!" : "Alert acknowledged."}`
+      );
+
+      await db.update(sosAlerts).set({ status: "acknowledged" }).where(and(eq(sosAlerts.id, input.incidentId), eq(sosAlerts.status, "active")));
+
+      return { success: true } as const;
+    }),
+  }),
+
+  community: router({
+    posts: protectedProcedure.input(z.object({
+      category: z.string().optional(),
+      limit: z.number().int().min(1).max(50).default(20),
+      offset: z.number().int().min(0).default(0),
+    })).query(async ({ input }) => {
+      const db = await requireDb();
+      const query = db.select({
+        id: communityPosts.id,
+        userId: communityPosts.userId,
+        authorName: users.name,
+        title: communityPosts.title,
+        content: communityPosts.content,
+        category: communityPosts.category,
+        locationName: communityPosts.locationName,
+        createdAt: communityPosts.createdAt,
+      })
+      .from(communityPosts)
+      .leftJoin(users, eq(communityPosts.userId, users.id))
+      .where(and(eq(communityPosts.isHidden, false), input.category ? eq(communityPosts.category, input.category) : undefined))
+      .orderBy(desc(communityPosts.createdAt))
+      .limit(input.limit)
+      .offset(input.offset);
+
+      return query;
+    }),
+
+    createPost: protectedProcedure.input(z.object({
+      title: z.string().trim().min(3).max(255),
+      content: z.string().trim().min(5).max(5000),
+      category: z.enum(["safety_tip", "alert", "advice", "experience", "general"]).default("safety_tip"),
+      locationName: z.string().trim().max(120).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const [post] = await db.insert(communityPosts).values({
+        userId: ctx.user.id,
+        title: input.title,
+        content: input.content,
+        category: input.category,
+        locationName: input.locationName,
+      }).returning();
+      return post;
+    }),
+
+    getPost: protectedProcedure.input(z.object({ id: z.number().int() })).query(async ({ input }) => {
+      const db = await requireDb();
+      const post = (await db.select({
+        id: communityPosts.id,
+        userId: communityPosts.userId,
+        authorName: users.name,
+        title: communityPosts.title,
+        content: communityPosts.content,
+        category: communityPosts.category,
+        locationName: communityPosts.locationName,
+        createdAt: communityPosts.createdAt,
+        isHidden: communityPosts.isHidden,
+      })
+      .from(communityPosts)
+      .leftJoin(users, eq(communityPosts.userId, users.id))
+      .where(and(eq(communityPosts.id, input.id), eq(communityPosts.isHidden, false)))
+      .limit(1))[0];
+
+      if (!post) throw new TRPCError({ code: "NOT_FOUND", message: "Post not found or hidden." });
+
+      const comments = await db.select({
+        id: communityComments.id,
+        userId: communityComments.userId,
+        authorName: users.name,
+        content: communityComments.content,
+        createdAt: communityComments.createdAt,
+      })
+      .from(communityComments)
+      .leftJoin(users, eq(communityComments.userId, users.id))
+      .where(and(eq(communityComments.postId, post.id), eq(communityComments.isHidden, false)))
+      .orderBy(communityComments.createdAt);
+
+      return { post, comments };
+    }),
+
+    addComment: protectedProcedure.input(z.object({
+      postId: z.number().int(),
+      content: z.string().trim().min(1).max(2000),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const post = (await db.select().from(communityPosts).where(and(eq(communityPosts.id, input.postId), eq(communityPosts.isHidden, false))).limit(1))[0];
+      if (!post) throw new TRPCError({ code: "NOT_FOUND", message: "Post not found." });
+
+      const [comment] = await db.insert(communityComments).values({
+        postId: input.postId,
+        userId: ctx.user.id,
+        content: input.content,
+      }).returning();
+      return comment;
+    }),
+
+    report: protectedProcedure.input(z.object({
+      postId: z.number().int().optional(),
+      commentId: z.number().int().optional(),
+      reason: z.string().trim().min(3).max(255),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await db.insert(communityReports).values({
+        reportedByUserId: ctx.user.id,
+        postId: input.postId ?? null,
+        commentId: input.commentId ?? null,
+        reason: input.reason,
+      });
+      return { success: true } as const;
+    }),
+  }),
+
   admin: router({
 
     users: router({
@@ -804,7 +1283,7 @@ export const appRouter = router({
         return { success: true } as const;
       }),
     }),
-audit: adminProcedure.query(async () => { const db = await requireDb(); return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(100); }),
+    audit: adminProcedure.query(async () => { const db = await requireDb(); return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(100); }),
     incidents: adminProcedure.query(async () => {
       const db = await requireDb();
       return db.select().from(sosAlerts).orderBy(desc(sosAlerts.createdAt));
@@ -817,7 +1296,145 @@ audit: adminProcedure.query(async () => { const db = await requireDb(); return d
       const db = await requireDb();
       return db.select().from(vehicleReports).orderBy(desc(vehicleReports.createdAt));
     }),
+
+    responderDestinations: router({
+      list: adminProcedure.query(async () => {
+        const db = await requireDb();
+        const rows = await db.select().from(emergencyResponderDestinations).orderBy(emergencyResponderDestinations.priority, emergencyResponderDestinations.name);
+        if (rows.length === 0) {
+          await db.insert(emergencyResponderDestinations).values([
+            { name: "India 112 National Emergency", type: "national_emergency", phone: "112", enabled: true, priority: 1, notes: "All-in-one national emergency number in India" },
+            { name: "Local Police Control Room", type: "police", phone: "100", enabled: true, priority: 2, notes: "State / District police dispatch" },
+            { name: "Women Safety NGO Helpline", type: "ngo", phone: "1091", enabled: true, priority: 3, notes: "NGO & crisis response network" },
+            { name: "Emergency Coordinator", type: "coordinator", enabled: false, priority: 4, notes: "Designated organization safety lead" },
+          ]);
+          return db.select().from(emergencyResponderDestinations).orderBy(emergencyResponderDestinations.priority, emergencyResponderDestinations.name);
+        }
+        return rows;
+      }),
+
+      upsert: adminProcedure.input(z.object({
+        id: z.number().int().optional(),
+        name: z.string().trim().min(2).max(120),
+        type: z.enum(["national_emergency", "police", "ngo", "coordinator"]),
+        phone: z.string().trim().optional().or(z.literal("")),
+        email: z.string().trim().email().optional().or(z.literal("")),
+        notifySms: z.boolean().default(false),
+        notifyEmail: z.boolean().default(false),
+        notifyWhatsApp: z.boolean().default(false),
+        enabled: z.boolean().default(true),
+        priority: z.number().int().min(1).max(10).default(1),
+        notes: z.string().trim().max(500).optional(),
+      })).mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        if (input.id) {
+          await db.update(emergencyResponderDestinations).set({
+            name: input.name,
+            type: input.type,
+            phone: input.phone || null,
+            email: input.email || null,
+            notifySms: input.notifySms,
+            notifyEmail: input.notifyEmail,
+            notifyWhatsApp: input.notifyWhatsApp,
+            enabled: input.enabled,
+            priority: input.priority,
+            notes: input.notes || null,
+          }).where(eq(emergencyResponderDestinations.id, input.id));
+        } else {
+          await db.insert(emergencyResponderDestinations).values({
+            name: input.name,
+            type: input.type,
+            phone: input.phone || null,
+            email: input.email || null,
+            notifySms: input.notifySms,
+            notifyEmail: input.notifyEmail,
+            notifyWhatsApp: input.notifyWhatsApp,
+            enabled: input.enabled,
+            priority: input.priority,
+            notes: input.notes || null,
+          });
+        }
+        await db.insert(auditLogs).values({
+          actorUserId: ctx.user.id,
+          action: "responder_destination_configured",
+          metadata: JSON.stringify({ name: input.name, type: input.type }),
+        });
+        return { success: true } as const;
+      }),
+
+      toggle: adminProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ input }) => {
+        const db = await requireDb();
+        const dest = (await db.select().from(emergencyResponderDestinations).where(eq(emergencyResponderDestinations.id, input.id)).limit(1))[0];
+        if (!dest) throw new TRPCError({ code: "NOT_FOUND", message: "Destination not found." });
+        await db.update(emergencyResponderDestinations).set({ enabled: !dest.enabled }).where(eq(emergencyResponderDestinations.id, input.id));
+        return { success: true, enabled: !dest.enabled } as const;
+      }),
+
+      remove: adminProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ input }) => {
+        const db = await requireDb();
+        await db.delete(emergencyResponderDestinations).where(eq(emergencyResponderDestinations.id, input.id));
+        return { success: true } as const;
+      }),
+    }),
+
+    community: router({
+      reports: adminProcedure.query(async () => {
+        const db = await requireDb();
+        return db.select({
+          id: communityReports.id,
+          reporterId: communityReports.reportedByUserId,
+          reporterName: users.name,
+          postId: communityReports.postId,
+          commentId: communityReports.commentId,
+          reason: communityReports.reason,
+          status: communityReports.status,
+          createdAt: communityReports.createdAt,
+        })
+        .from(communityReports)
+        .leftJoin(users, eq(communityReports.reportedByUserId, users.id))
+        .orderBy(desc(communityReports.createdAt));
+      }),
+
+      moderate: adminProcedure.input(z.object({
+        reportId: z.number().int(),
+        action: z.enum(["hide_content", "unhide_content", "dismiss"]),
+        adminNotes: z.string().optional(),
+      })).mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const report = (await db.select().from(communityReports).where(eq(communityReports.id, input.reportId)).limit(1))[0];
+        if (!report) throw new TRPCError({ code: "NOT_FOUND", message: "Report not found." });
+
+        if (input.action === "hide_content") {
+          if (report.postId) {
+            await db.update(communityPosts).set({ isHidden: true }).where(eq(communityPosts.id, report.postId));
+          }
+          if (report.commentId) {
+            await db.update(communityComments).set({ isHidden: true }).where(eq(communityComments.id, report.commentId));
+          }
+          await db.update(communityReports).set({ status: "actioned", adminNotes: input.adminNotes || "Content hidden", reviewedByUserId: ctx.user.id, reviewedAt: new Date() }).where(eq(communityReports.id, report.id));
+        } else if (input.action === "unhide_content") {
+          if (report.postId) {
+            await db.update(communityPosts).set({ isHidden: false }).where(eq(communityPosts.id, report.postId));
+          }
+          if (report.commentId) {
+            await db.update(communityComments).set({ isHidden: false }).where(eq(communityComments.id, report.commentId));
+          }
+          await db.update(communityReports).set({ status: "reviewed", adminNotes: input.adminNotes || "Content restored", reviewedByUserId: ctx.user.id, reviewedAt: new Date() }).where(eq(communityReports.id, report.id));
+        } else if (input.action === "dismiss") {
+          await db.update(communityReports).set({ status: "dismissed", adminNotes: input.adminNotes || "Report dismissed", reviewedByUserId: ctx.user.id, reviewedAt: new Date() }).where(eq(communityReports.id, report.id));
+        }
+
+        await db.insert(auditLogs).values({
+          actorUserId: ctx.user.id,
+          action: "community_content_moderated",
+          metadata: JSON.stringify({ reportId: report.id, action: input.action }),
+        });
+
+        return { success: true } as const;
+      }),
+    }),
   }),
 });
+
 
 export type AppRouter = typeof appRouter;

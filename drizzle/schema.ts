@@ -18,6 +18,7 @@ export const responseEnum = pgEnum("response", ["acknowledged", "responding"]);
 export const checkInStatusEnum = pgEnum("checkInStatus", ["active", "safe", "expired", "cancelled"]);
 export const tokenKindEnum = pgEnum("kind", ["email", "phone"]);
 export const checkInEscalationStatusEnum = pgEnum("checkInEscalationStatus", ["pending", "sent", "failed"]);
+export const tripStatusEnum = pgEnum("tripStatus", ["active", "completed", "cancelled", "emergency"]);
 
 
 export const users = pgTable("users", {
@@ -51,6 +52,7 @@ export const emergencyContacts = pgTable("emergencyContacts", {
   notifySms: boolean("notifySms").default(true).notNull(),
   notifyEmail: boolean("notifyEmail").default(true).notNull(),
   notifyWhatsApp: boolean("notifyWhatsApp").default(false).notNull(),
+  isNextOfKin: boolean("isNextOfKin").default(false).notNull(),
   phoneVerifiedAt: timestamp("phoneVerifiedAt"),
   emailVerifiedAt: timestamp("emailVerifiedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -282,3 +284,134 @@ export const vehicleReports = pgTable("vehicleReports", {
 export type FileUpload = typeof fileUploads.$inferSelect;
 export type PersonOfConcernReport = typeof personOfConcernReports.$inferSelect;
 export type VehicleReport = typeof vehicleReports.$inferSelect;
+
+// ==========================================
+// TRAVEL SAFETY & TRAVEL LOG
+// ==========================================
+
+export const travelTrips = pgTable("travelTrips", {
+  id: serial("id").primaryKey(),
+  tripId: varchar("tripId", { length: 64 }).notNull().unique(),
+  userId: integer("userId").notNull(),
+  destination: text("destination").notNull(),
+  expectedArrival: timestamp("expectedArrival").notNull(),
+  vehicleNumber: varchar("vehicleNumber", { length: 60 }),
+  vehicleType: varchar("vehicleType", { length: 60 }),
+  vehicleColor: varchar("vehicleColor", { length: 60 }),
+  vehicleDescription: text("vehicleDescription"),
+  vehiclePhotoKey: varchar("vehiclePhotoKey", { length: 255 }),
+  trustedContactIds: text("trustedContactIds"),
+  verificationCode: varchar("verificationCode", { length: 32 }).notNull(),
+  status: tripStatusEnum("status").default("active").notNull(),
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+  lastLatitude: doublePrecision("lastLatitude"),
+  lastLongitude: doublePrecision("lastLongitude"),
+  lastAccuracy: doublePrecision("lastAccuracy"),
+  lastLocationAt: timestamp("lastLocationAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+});
+
+export const travelLocations = pgTable("travelLocations", {
+  id: serial("id").primaryKey(),
+  tripId: integer("tripId").notNull(),
+  latitude: doublePrecision("latitude").notNull(),
+  longitude: doublePrecision("longitude").notNull(),
+  accuracy: doublePrecision("accuracy"),
+  timestamp: timestamp("timestamp").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+// ==========================================
+// 5 KM NEARBY RESPONDER & ALERTS
+// ==========================================
+
+export const nearbyResponderSettings = pgTable("nearbyResponderSettings", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull().unique(),
+  enabled: boolean("enabled").default(false).notNull(),
+  lastLatitude: doublePrecision("lastLatitude"),
+  lastLongitude: doublePrecision("lastLongitude"),
+  lastLocationAt: timestamp("lastLocationAt"),
+  radiusKm: doublePrecision("radiusKm").default(5.0).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+});
+
+export const nearbyAlertNotifications = pgTable("nearbyAlertNotifications", {
+  id: serial("id").primaryKey(),
+  incidentId: integer("incidentId").notNull(),
+  responderUserId: integer("responderUserId").notNull(),
+  distanceKm: doublePrecision("distanceKm").notNull(),
+  status: varchar("status", { length: 40 }).default("notified").notNull(),
+  notifiedAt: timestamp("notifiedAt").defaultNow().notNull(),
+  acknowledgedAt: timestamp("acknowledgedAt"),
+});
+
+// ==========================================
+// CONFIGURABLE EMERGENCY RESPONDER DESTINATIONS
+// ==========================================
+
+export const emergencyResponderDestinations = pgTable("emergencyResponderDestinations", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  type: varchar("type", { length: 40 }).notNull(), // national_emergency, police, ngo, coordinator
+  phone: varchar("phone", { length: 64 }),
+  email: varchar("email", { length: 320 }),
+  notifySms: boolean("notifySms").default(false).notNull(),
+  notifyEmail: boolean("notifyEmail").default(false).notNull(),
+  notifyWhatsApp: boolean("notifyWhatsApp").default(false).notNull(),
+  enabled: boolean("enabled").default(true).notNull(),
+  priority: integer("priority").default(1).notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+});
+
+// ==========================================
+// COMMUNITY SAFETY & MODERATION
+// ==========================================
+
+export const communityPosts = pgTable("communityPosts", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  content: text("content").notNull(),
+  category: varchar("category", { length: 60 }).default("safety_tip").notNull(),
+  locationName: varchar("locationName", { length: 120 }),
+  isHidden: boolean("isHidden").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdate(() => new Date()).notNull(),
+});
+
+export const communityComments = pgTable("communityComments", {
+  id: serial("id").primaryKey(),
+  postId: integer("postId").notNull(),
+  userId: integer("userId").notNull(),
+  content: text("content").notNull(),
+  isHidden: boolean("isHidden").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const communityReports = pgTable("communityReports", {
+  id: serial("id").primaryKey(),
+  reportedByUserId: integer("reportedByUserId").notNull(),
+  postId: integer("postId"),
+  commentId: integer("commentId"),
+  reason: varchar("reason", { length: 255 }).notNull(),
+  status: varchar("status", { length: 40 }).default("pending").notNull(),
+  adminNotes: text("adminNotes"),
+  reviewedByUserId: integer("reviewedByUserId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  reviewedAt: timestamp("reviewedAt"),
+});
+
+export type TravelTrip = typeof travelTrips.$inferSelect;
+export type TravelLocation = typeof travelLocations.$inferSelect;
+export type NearbyResponderSetting = typeof nearbyResponderSettings.$inferSelect;
+export type NearbyAlertNotification = typeof nearbyAlertNotifications.$inferSelect;
+export type EmergencyResponderDestination = typeof emergencyResponderDestinations.$inferSelect;
+export type CommunityPost = typeof communityPosts.$inferSelect;
+export type CommunityComment = typeof communityComments.$inferSelect;
+export type CommunityReport = typeof communityReports.$inferSelect;
+

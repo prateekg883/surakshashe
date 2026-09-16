@@ -274,3 +274,18 @@ export async function sendNotification(channel: NotificationChannel, contact: Em
   if (!contact.phone) return { channel, status: "failed", errorMessage: "Contact has no phone number." };
   return sendTwilio(contact.phone, body, channel, idempotencyKey);
 }
+
+export async function sendResponderDestinationNotification(
+  channel: NotificationChannel,
+  destination: { name: string; phone?: string | null; email?: string | null },
+  incidentTitle: string,
+  message: string,
+  idempotencyKey?: string
+): Promise<DeliveryResult> {
+  if (channel === "email") {
+    if (!destination.email) return { channel, status: "failed", errorMessage: `Destination ${destination.name} has no email configured.` };
+    return sendEmail(destination.email, incidentTitle, message, idempotencyKey);
+  }
+  if (!destination.phone) return { channel, status: "failed", errorMessage: `Destination ${destination.name} has no phone configured.` };
+  return sendTwilio(destination.phone, message, channel, idempotencyKey);
+}
