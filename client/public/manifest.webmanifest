@@ -1,0 +1,14 @@
+{
+  "name": "SurakshaShe Women Safety",
+  "short_name": "SurakshaShe",
+  "description": "A personal safety workspace for trusted contacts, SOS planning, and check-ins.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fbf8f7",
+  "theme_color": "#e11d48",
+  "lang": "en-IN",
+  "icons": [
+    { "src": "/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
