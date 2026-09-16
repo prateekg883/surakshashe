@@ -14,6 +14,29 @@ function verifyCronSecret(req: Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+let lastOpportunisticRun = 0;
+const OPPORTUNISTIC_THROTTLE_MS = 30_000; // run at most once per 30 seconds across requests
+
+export async function processAllSafetyTasks() {
+  const checkIns = await processExpiredCheckIns();
+  const delivery = await processDeliveryQueues();
+  return { ...checkIns, delivery };
+}
+
+export async function opportunisticSafetySweep(force = false) {
+  const now = Date.now();
+  if (!force && now - lastOpportunisticRun < OPPORTUNISTIC_THROTTLE_MS) {
+    return null;
+  }
+  lastOpportunisticRun = now;
+  try {
+    return await processAllSafetyTasks();
+  } catch (err) {
+    console.error("[Opportunistic Safety Sweep Error]:", err);
+    return null;
+  }
+}
+
 export async function processCheckInSchedule(req: Request, res: Response) {
   try {
     let authorized = verifyCronSecret(req);
@@ -34,9 +57,8 @@ export async function processCheckInSchedule(req: Request, res: Response) {
       }
     }
     if (!authorized) return res.status(403).json({ error: "cron-only" });
-    const result = await processExpiredCheckIns();
-    const delivery = await processDeliveryQueues();
-    return res.json({ ok: true, ...result, delivery, timestamp: new Date().toISOString() });
+    const result = await processAllSafetyTasks();
+    return res.json({ ok: true, ...result, timestamp: new Date().toISOString() });
   } catch (error) {
     console.error("[Scheduled Check-In Error]:", error);
     return res.status(500).json({ error: "scheduled check-in processing failed", timestamp: new Date().toISOString() });

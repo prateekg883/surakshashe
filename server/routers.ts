@@ -39,7 +39,7 @@ import { saveUploadedFile } from "./storage";
 import { cleanPhoneNumber, isEmailConfigured, sendPasswordResetEmail, sendVerificationNotification } from "./notificationService";
 import { assertRateLimit, requestIp } from "./rateLimit";
 import { processExpiredCheckIns } from "./checkInService";
-import { queueSosPriority, triggerDeliveryWorkerImmediate } from "./deliveryQueueService";
+import { processDeliveryQueues, processSosEscalations, queueSosPriority, triggerDeliveryWorkerImmediate } from "./deliveryQueueService";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -494,6 +494,12 @@ export const appRouter = router({
   sos: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const db = await requireDb();
+      try {
+        await processSosEscalations();
+        await processDeliveryQueues();
+      } catch (err) {
+        console.error("[SOS Escalation Query Error]:", err);
+      }
       return db.select().from(sosAlerts).where(eq(sosAlerts.userId, ctx.user.id)).orderBy(desc(sosAlerts.createdAt));
     }),
     policy: protectedProcedure.query(async ({ ctx }) => {
@@ -578,6 +584,12 @@ export const appRouter = router({
   emergency: router({
     view: publicProcedure.input(z.object({ token: z.string().min(32).max(100) })).query(async ({ input }) => {
       const db = await requireDb();
+      try {
+        await processSosEscalations();
+        await processDeliveryQueues();
+      } catch (err) {
+        console.error("[Emergency Escalation Query Error]:", err);
+      }
       const row = await getIncidentByToken(db, input.token);
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "This emergency link is invalid, expired, or revoked." });
       const rawTimeline = await db.select().from(incidentTimeline).where(eq(incidentTimeline.incidentId, row.alert.id)).orderBy(incidentTimeline.createdAt);
@@ -625,7 +637,16 @@ export const appRouter = router({
   }),
 
   checkIns: router({
-    list: protectedProcedure.query(async ({ ctx }) => { const db = await requireDb(); return db.select().from(safetyCheckIns).where(eq(safetyCheckIns.userId, ctx.user.id)).orderBy(desc(safetyCheckIns.createdAt)); }),
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      try {
+        await processExpiredCheckIns(ctx.user.id);
+        await processDeliveryQueues();
+      } catch (err) {
+        console.error("[Check-In List Sweep Error]:", err);
+      }
+      return db.select().from(safetyCheckIns).where(eq(safetyCheckIns.userId, ctx.user.id)).orderBy(desc(safetyCheckIns.createdAt));
+    }),
     policy: protectedProcedure.query(async ({ ctx }) => { const db = await requireDb(); const policy = (await db.select().from(checkInPolicies).where(eq(checkInPolicies.userId, ctx.user.id)).limit(1))[0]; return policy || { escalationEnabled: false, graceMinutes: 15 }; }),
     updatePolicy: protectedProcedure.input(z.object({ escalationEnabled: z.boolean(), graceMinutes: z.number().int().min(5).max(1440) })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();

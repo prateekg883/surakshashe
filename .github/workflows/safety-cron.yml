@@ -1,0 +1,28 @@
+name: SurakshaShe Safety & Escalation Cron
+
+on:
+  schedule:
+    # Runs every 10 minutes to process check-in expirations and delivery retries
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  safety-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Scheduled Safety Sweep
+        run: |
+          if [ -z "${{ secrets.APP_BASE_URL }}" ]; then
+            echo "APP_BASE_URL secret is not set in GitHub repository settings. Skipping cron invocation."
+            exit 0
+          fi
+          AUTH_HEADER=""
+          if [ -n "${{ secrets.CRON_SECRET }}" ]; then
+            AUTH_HEADER="Authorization: Bearer ${{ secrets.CRON_SECRET }}"
+          fi
+          echo "Calling ${{ secrets.APP_BASE_URL }}/api/scheduled/process-check-ins..."
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST \
+            ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+            "${{ secrets.APP_BASE_URL }}/api/scheduled/process-check-ins")
+          echo "$RESPONSE"

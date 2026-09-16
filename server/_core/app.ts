@@ -5,7 +5,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { registerWebhookRoutes } from "../webhooks";
-import { processCheckInSchedule } from "../scheduled";
+import { opportunisticSafetySweep, processCheckInSchedule } from "../scheduled";
 import { checkDatabaseHealth } from "../db";
 import { getUploadedFile } from "../storage";
 import { processDeliveryQueues } from "../deliveryQueueService";
@@ -26,6 +26,16 @@ export function createExpressApp() {
     next();
   });
 
+  // Request-driven opportunistic safety sweep (runs at most once every 30s)
+  app.use("/api", async (_req, _res, next) => {
+    try {
+      await opportunisticSafetySweep();
+    } catch {
+      // never block request pipeline on sweep error
+    }
+    next();
+  });
+
   // Configure body parser with 50mb limit for uploads
   app.use(express.json({
     limit: "50mb",
@@ -35,7 +45,7 @@ export function createExpressApp() {
   }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-  // Public health check endpoints
+  // Public health check endpoints (also triggers sweep on external uptime monitor pings)
   app.get(["/api/health", "/healthz"], async (_req, res) => {
     const health = await checkDatabaseHealth();
     if (health.ok) {

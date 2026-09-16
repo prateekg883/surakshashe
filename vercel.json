@@ -20,7 +20,7 @@
   "crons": [
     {
       "path": "/api/scheduled/process-check-ins",
-      "schedule": "* * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
