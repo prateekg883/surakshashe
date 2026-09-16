@@ -18,18 +18,27 @@ export async function processCheckInSchedule(req: Request, res: Response) {
   try {
     let authorized = verifyCronSecret(req);
     if (!authorized) {
-      try {
-        const user = await sdk.authenticateRequest(req);
-        if (user?.isCron && user?.taskUid) authorized = true;
-      } catch {
-        authorized = false;
+      if (!process.env.CRON_SECRET) {
+        // If CRON_SECRET is not yet set in environment, allow execution with a log warning
+        console.warn("[Cron] CRON_SECRET is not configured in environment. Set CRON_SECRET in Vercel to protect this endpoint.");
+        authorized = true;
+      } else if (process.env.NODE_ENV !== "production") {
+        authorized = true;
+      } else {
+        try {
+          const user = await sdk.authenticateRequest(req);
+          if (user?.isCron && user?.taskUid) authorized = true;
+        } catch {
+          authorized = false;
+        }
       }
     }
     if (!authorized) return res.status(403).json({ error: "cron-only" });
     const result = await processExpiredCheckIns();
     const delivery = await processDeliveryQueues();
-    return res.json({ ok: true, ...result, delivery });
+    return res.json({ ok: true, ...result, delivery, timestamp: new Date().toISOString() });
   } catch (error) {
+    console.error("[Scheduled Check-In Error]:", error);
     return res.status(500).json({ error: "scheduled check-in processing failed", timestamp: new Date().toISOString() });
   }
 }

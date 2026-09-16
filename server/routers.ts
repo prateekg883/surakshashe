@@ -542,7 +542,7 @@ export const appRouter = router({
           await addTimeline(db, alert.id, "notification_failed", "No configured notification channels are available.");
         }
       }
-      triggerDeliveryWorkerImmediate();
+      await triggerDeliveryWorkerImmediate();
       const currentAlert = (await db.select().from(sosAlerts).where(eq(sosAlerts.id, alert.id)).limit(1))[0] || alert;
       return { alert: currentAlert, emergencyLink: appBaseUrl() ? `${appBaseUrl()}/emergency/${encodeURIComponent(rawToken)}` : `/emergency/${encodeURIComponent(rawToken)}` };
     }),

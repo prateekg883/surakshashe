@@ -276,8 +276,10 @@ export function startDeliveryWorker() {
   void processDeliveryQueues().catch(error => console.error("[Delivery worker]", error));
 }
 
-export function triggerDeliveryWorkerImmediate() {
-  setImmediate(() => {
-    void processDeliveryQueues().catch(error => console.error("[Delivery worker trigger]", error));
-  });
+export async function triggerDeliveryWorkerImmediate() {
+  try {
+    return await processDeliveryQueues();
+  } catch (error) {
+    console.error("[Delivery worker trigger]", error);
+  }
 }
